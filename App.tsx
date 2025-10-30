@@ -52,15 +52,33 @@ const App: React.FC = () => {
     }, [statusFilter, orders]);
 
     const handleConfirmOrder = async (orderId: string, adminNotes: string) => {
-        await apiService.confirmOrder(orderId, adminNotes);
-        showNotification('訂單已確認！', 'success');
-        await loadOrders(true);
+        try {
+            await apiService.confirmOrder(orderId, adminNotes);
+            setOrders(prevOrders =>
+                prevOrders.map(o =>
+                    o.orderId === orderId
+                        ? { ...o, status: 'confirmed', adminNotes, confirmedAt: new Date().toISOString() }
+                        : o
+                )
+            );
+            showNotification('訂單已確認！', 'success');
+        } catch (error) {
+            showNotification('確認訂單時發生錯誤', 'error');
+        }
     };
 
     const handleStatusUpdate = async (orderId: string, status: OrderStatus) => {
-        await apiService.updateOrderStatus(orderId, status);
-        showNotification('訂單狀態已更新！', 'success');
-        await loadOrders(true);
+        try {
+            await apiService.updateOrderStatus(orderId, status);
+            setOrders(prevOrders =>
+                prevOrders.map(o =>
+                    o.orderId === orderId ? { ...o, status } : o
+                )
+            );
+            showNotification('訂單狀態已更新！', 'success');
+        } catch (error) {
+            showNotification('更新狀態時發生錯誤', 'error');
+        }
     };
 
     const handlePrint = (order: Order) => {
