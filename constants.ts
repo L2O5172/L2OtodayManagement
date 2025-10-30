@@ -1,5 +1,5 @@
 // IMPORTANT: Replace this with your actual Google Apps Script Web App URL
-export const API_ENDPOINT = 'https://script.google.com/macros/s/AKfycbxkiCWJjuew-82ewrIgCCVctbpIIyalrCMfJBwg5tjrfXIG2cIisG9dynjJBAFocIMP/exec';
+export const API_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwy6JRELr2_uT5nhRE23nQaI_eQuf6mc7hDClE0f74bCLCsOjmj6qGgYcMmZ1sIMfud/exec';
 
 // Default menu if fetching from Google Sheet fails
 export const DEFAULT_MENU: { name: string; price: number; icon: string; }[] = [
