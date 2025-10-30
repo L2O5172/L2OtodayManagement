@@ -1,0 +1,566 @@
+// Google Apps Script 後端代碼 - 台灣小吃店訂餐系統
+const SHEET_NAME = '訂單資料';
+
+// Handle CORS preflight requests
+function doOptions(e) {
+  return ContentService.createTextOutput()
+    .setMimeType(ContentService.MimeType.JSON)
+    .withHeaders({
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+}
+
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    const action = data.action;
+    
+    let result;
+    
+    switch(action) {
+      case 'getMenu':
+        result = getMenu();
+        break;
+      case 'createOrder':
+        result = createOrder(data.orderData, data.idToken);
+        break;
+      case 'getOrders':
+        result = getOrders(data);
+        break;
+      case 'updateOrderStatus':
+        result = updateOrderStatus(data.orderId, data.status);
+        break;
+      default:
+        throw new Error('未知的操作類型');
+    }
+    
+    return createResponse(true, result, '操作成功');
+    
+  } catch (error) {
+    console.error('Error:', error);
+    return createResponse(false, null, error.message);
+  }
+}
+
+function doGet(e) {
+  const action = e.parameter.action;
+  
+  if (action === 'getMenu') {
+    return createResponse(true, getMenu(), '成功');
+  }
+  
+  return createResponse(false, null, '不支援的請求方法');
+}
+
+// 創建統一回應格式 (處理 CORS)
+function createResponse(success, data, message) {
+  const response = {
+    success: success,
+    data: data,
+    message: message
+  };
+  
+  return ContentService.createTextOutput(JSON.stringify(response))
+    .setMimeType(ContentService.MimeType.JSON)
+    .withHeaders({'Access-Control-Allow-Origin': '*'});
+}
+
+// 獲取當前使用的試算表
+function getCurrentSpreadsheet() {
+  try {
+    return SpreadsheetApp.getActiveSpreadsheet();
+  } catch (error) {
+    throw new Error('請確保此腳本已綁定到 Google 試算表');
+  }
+}
+
+// 獲取菜單
+function getMenu() {
+  try {
+    const spreadsheet = getCurrentSpreadsheet();
+    let sheet = spreadsheet.getSheetByName('菜單');
+    
+    if (!sheet) {
+      return getDefaultMenu();
+    }
+    
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return getDefaultMenu();
+    }
+    
+    const headers = data[0];
+    
+    const nameIndex = headers.indexOf('名稱');
+    const priceIndex = headers.indexOf('價格');
+    const iconIndex = headers.indexOf('圖標');
+    const statusIndex = headers.indexOf('狀態');
+    const imageIndex = headers.indexOf('圖片');
+    
+    if (nameIndex === -1 || priceIndex === -1) {
+      return getDefaultMenu();
+    }
+    
+    const menuItems = [];
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      if (row[nameIndex] && row[priceIndex]) {
+        menuItems.push({
+          name: row[nameIndex].toString().trim(),
+          price: parseInt(row[priceIndex]) || 0,
+          icon: iconIndex !== -1 && row[iconIndex] ? row[iconIndex].toString().trim() : '🍽️',
+          status: statusIndex !== -1 && row[statusIndex] ? row[statusIndex].toString().trim() : '供應中',
+          image: imageIndex !== -1 && row[imageIndex] ? row[imageIndex].toString().trim() : ''
+        });
+      }
+    }
+    
+    return menuItems.length > 0 ? menuItems : getDefaultMenu();
+    
+  } catch (error) {
+    console.error('獲取菜單錯誤:', error);
+    return getDefaultMenu();
+  }
+}
+
+// 默認菜單
+function getDefaultMenu() {
+  return [
+    { 
+      name: '滷肉飯', 
+      price: 35, 
+      icon: '🍚', 
+      status: '供應中',
+      image: 'https://images.unsplash.com/photo-1541519227354-08fa5d50c44d?w=400&h=300&fit=crop'
+    },
+    { 
+      name: '雞肉飯', 
+      price: 40, 
+      icon: '🍗', 
+      status: '供應中',
+      image: 'https://images.unsplash.com/photo-1586190848861-99aa4a171e90?w=400&h=300&fit=crop'
+    },
+    { 
+      name: '蚵仔煎', 
+      price: 65, 
+      icon: '🍳', 
+      status: '供應中',
+      image: 'https://images.unsplash.com/photo-1563245372-f21724e3856d?w=400&h=300&fit=crop'
+    },
+    { 
+      name: '大腸麵線', 
+      price: 50, 
+      icon: '🍜', 
+      status: '供應中',
+      image: 'https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=400&h=300&fit=crop'
+    },
+    { 
+      name: '珍珠奶茶', 
+      price: 45, 
+      icon: '🥤', 
+      status: '供應中',
+      image: 'https://images.unsplash.com/photo-1572490122747-3968b75cc699?w=400&h=300&fit=crop'
+    }
+  ];
+}
+
+// 創建訂單 - 確保電話號碼保持原樣
+function createOrder(orderData, idToken) {
+  try {
+    const spreadsheet = getCurrentSpreadsheet();
+    let sheet = spreadsheet.getSheetByName(SHEET_NAME);
+    
+    if (!sheet) {
+      sheet = initializeOrderSheet(spreadsheet);
+    }
+    
+    if (!orderData.customerName || !orderData.customerPhone) {
+      throw new Error('顧客姓名和電話為必填欄位');
+    }
+    
+    // 驗證電話格式但不修改
+    const phoneRegex = /^09\d{8}$/;
+    if (!phoneRegex.test(orderData.customerPhone)) {
+      throw new Error('電話號碼格式不正確，必須是09開頭的10位數字');
+    }
+    
+    const orderId = generateOrderId();
+    const now = new Date();
+    
+    let totalAmount = 0;
+    const itemsArray = [];
+    
+    orderData.items.forEach(item => {
+      totalAmount += item.price * item.quantity;
+      itemsArray.push(`${item.name} x${item.quantity}`);
+    });
+    
+    if (orderData.deliveryAddress && orderData.deliveryAddress.trim() !== '') {
+      totalAmount += 30;
+    }
+    
+    const itemsString = itemsArray.join(', ');
+    
+    // 直接使用原始電話號碼，不進行任何轉換
+    const rowData = [
+      orderId,
+      orderData.customerName,
+      orderData.customerPhone, // 保持原樣 0936220535
+      itemsString,
+      totalAmount,
+      new Date(orderData.pickupTime),
+      orderData.deliveryAddress || '',
+      orderData.notes || '',
+      'pending',
+      now,
+      idToken || '',
+      '',
+      now
+    ];
+    
+    sheet.appendRow(rowData);
+    
+    return {
+      orderId: orderId,
+      totalAmount: totalAmount,
+      createdAt: now.toISOString()
+    };
+    
+  } catch (error) {
+    console.error('創建訂單錯誤:', error);
+    throw new Error('創建訂單失敗: ' + error.message);
+  }
+}
+
+// 初始化訂單表單
+function initializeOrderSheet(spreadsheet) {
+  const sheet = spreadsheet.insertSheet(SHEET_NAME);
+  
+  const orderHeaders = [
+    '訂單編號', '顧客姓名', '手機號碼', '訂單內容', '總金額', '取餐時間', 
+    '外送地址', '備註', '訂單狀態', '創建時間', 'LINE_IDToken', '管理員備註', '最後更新時間'
+  ];
+  
+  sheet.getRange(1, 1, 1, orderHeaders.length).setValues([orderHeaders]);
+  sheet.getRange(1, 1, 1, orderHeaders.length).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  
+  // 設置欄位寬度
+  sheet.setColumnWidth(1, 150); // 訂單編號
+  sheet.setColumnWidth(2, 120); // 顧客姓名
+  sheet.setColumnWidth(3, 120); // 手機號碼
+  sheet.setColumnWidth(4, 200); // 訂單內容
+  sheet.setColumnWidth(5, 80);  // 總金額
+  sheet.setColumnWidth(6, 150); // 取餐時間
+  sheet.setColumnWidth(7, 200); // 外送地址
+  sheet.setColumnWidth(8, 150); // 備註
+  sheet.setColumnWidth(9, 100); // 訂單狀態
+  sheet.setColumnWidth(10, 150); // 創建時間
+  sheet.setColumnWidth(11, 200); // LINE_IDToken
+  sheet.setColumnWidth(12, 150); // 管理員備註
+  sheet.setColumnWidth(13, 150); // 最後更新時間
+  
+  console.log('訂單表單初始化完成');
+  return sheet;
+}
+
+// 生成訂單編號
+function generateOrderId() {
+  const now = new Date();
+  const dateStr = Utilities.formatDate(now, 'Asia/Taipei', 'yyyyMMdd');
+  const timeStr = Utilities.formatDate(now, 'Asia/Taipei', 'HHmmss');
+  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  return `ORDER${dateStr}${timeStr}${random}`;
+}
+
+// 正規化電話號碼：移除開頭的0
+function normalizePhone(phone) {
+  if (!phone) return '';
+  // 移除所有非數字字符，然後如果以0開頭則移除0
+  const digitsOnly = phone.replace(/\D/g, '');
+  return digitsOnly.startsWith('0') ? digitsOnly.substring(1) : digitsOnly;
+}
+
+// 查詢訂單 - 支援兩種電話格式
+function getOrders(params) {
+  try {
+    const spreadsheet = getCurrentSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+    
+    if (!sheet) {
+      return [];
+    }
+    
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) {
+      return [];
+    }
+    
+    const headers = data[0];
+    
+    const headerMap = {
+      orderId: headers.indexOf('訂單編號'),
+      customerName: headers.indexOf('顧客姓名'),
+      customerPhone: headers.indexOf('手機號碼'),
+      items: headers.indexOf('訂單內容'),
+      totalAmount: headers.indexOf('總金額'),
+      pickupTime: headers.indexOf('取餐時間'),
+      deliveryAddress: headers.indexOf('外送地址'),
+      notes: headers.indexOf('備註'),
+      status: headers.indexOf('訂單狀態'),
+      createdAt: headers.indexOf('創建時間'),
+      idToken: headers.indexOf('LINE_IDToken'),
+      adminNotes: headers.indexOf('管理員備註'),
+      updatedAt: headers.indexOf('最後更新時間')
+    };
+    
+    let filteredData = [];
+    
+    // 正規化搜尋的電話號碼
+    const normalizedSearchPhone = params.customerPhone ? normalizePhone(params.customerPhone) : '';
+    
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      let match = true;
+      
+      // 日期範圍過濾
+      if (params.startDate || params.endDate) {
+        const createdAt = row[headerMap.createdAt];
+        if (createdAt instanceof Date) {
+          const rowDate = Utilities.formatDate(createdAt, 'Asia/Taipei', 'yyyy-MM-dd');
+          
+          if (params.startDate && rowDate < params.startDate) {
+            match = false;
+          }
+          if (params.endDate && rowDate > params.endDate) {
+            match = false;
+          }
+        }
+      }
+      
+      // LINE 用戶搜尋
+      if (params.idToken && match) {
+        const rowIdToken = row[headerMap.idToken] || '';
+        if (rowIdToken.toString().trim() === params.idToken.toString().trim()) {
+          // LINE 用戶：只需要姓名匹配
+          if (params.customerName) {
+            const rowName = row[headerMap.customerName] ? row[headerMap.customerName].toString().trim() : '';
+            const searchName = params.customerName.toString().trim();
+            if (rowName !== searchName) {
+              match = false;
+            }
+          }
+        } else {
+          match = false;
+        }
+      }
+      // 非 LINE 用戶搜尋（需要姓名和電話匹配）
+      else if (match && (params.customerName || params.customerPhone)) {
+        // 姓名精確匹配
+        if (params.customerName) {
+          const rowName = row[headerMap.customerName] ? row[headerMap.customerName].toString().trim() : '';
+          const searchName = params.customerName.toString().trim();
+          if (rowName !== searchName) {
+            match = false;
+          }
+        }
+        
+        // 電話號碼匹配 - 支援兩種格式
+        if (match && params.customerPhone) {
+          const rowPhone = row[headerMap.customerPhone] ? row[headerMap.customerPhone].toString().trim() : '';
+          const searchPhone = params.customerPhone.toString().trim();
+          
+          // 正規化資料庫中的電話號碼
+          const normalizedRowPhone = normalizePhone(rowPhone);
+          
+          // 三種比對方式：
+          // 1. 原始比對 (0936220535 === 0936220535)
+          // 2. 正規化比對 (936220535 === 936220535)  
+          // 3. 交叉比對 (0936220535 與 936220535)
+          const exactMatch = rowPhone === searchPhone;
+          const normalizedMatch = normalizedRowPhone === normalizedSearchPhone;
+          const crossMatch = normalizedRowPhone === normalizePhone(searchPhone);
+          
+          if (!exactMatch && !normalizedMatch && !crossMatch) {
+            match = false;
+          }
+        }
+      }
+      
+      if (match) {
+        const order = {
+          orderId: row[headerMap.orderId] || '',
+          customerName: row[headerMap.customerName] || '',
+          customerPhone: row[headerMap.customerPhone] || '', // 保持原樣顯示
+          items: row[headerMap.items] || '',
+          totalAmount: parseFloat(row[headerMap.totalAmount]) || 0,
+          pickupTime: row[headerMap.pickupTime] ? row[headerMap.pickupTime].toISOString() : '',
+          deliveryAddress: row[headerMap.deliveryAddress] || '',
+          notes: row[headerMap.notes] || '',
+          status: row[headerMap.status] || 'pending',
+          createdAt: row[headerMap.createdAt] ? row[headerMap.createdAt].toISOString() : '',
+          adminNotes: row[headerMap.adminNotes] || '',
+          updatedAt: row[headerMap.updatedAt] ? row[headerMap.updatedAt].toISOString() : ''
+        };
+        filteredData.push(order);
+      }
+    }
+    
+    return filteredData;
+    
+  } catch (error) {
+    console.error('查詢訂單錯誤:', error);
+    throw new Error('查詢訂單失敗: ' + error.message);
+  }
+}
+
+// 更新訂單狀態
+function updateOrderStatus(orderId, status) {
+  if (!orderId || !status) {
+    throw new Error('訂單 ID 和新狀態為必填欄位');
+  }
+
+  try {
+    const spreadsheet = getCurrentSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+    if (!sheet) {
+      throw new Error('找不到訂單資料表');
+    }
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const orderIdCol = headers.indexOf('訂單編號');
+    const statusCol = headers.indexOf('訂單狀態');
+    const updatedAtCol = headers.indexOf('最後更新時間');
+
+    if (orderIdCol === -1 || statusCol === -1 || updatedAtCol === -1) {
+      throw new Error('訂單資料表欄位不完整 (需要: 訂單編號, 訂單狀態, 最後更新時間)');
+    }
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][orderIdCol] == orderId) { // Use '==' for potential type mismatch from Sheet
+        const rowToUpdate = i + 1; // Sheet rows are 1-indexed
+        sheet.getRange(rowToUpdate, statusCol + 1).setValue(status);
+        const now = new Date();
+        sheet.getRange(rowToUpdate, updatedAtCol + 1).setValue(now);
+        
+        return { orderId: orderId, status: status, updatedAt: now.toISOString() };
+      }
+    }
+
+    throw new Error('找不到指定的訂單: ' + orderId);
+
+  } catch (error) {
+    console.error('更新訂單狀態錯誤:', error);
+    throw new Error('更新訂單狀態失敗: ' + error.message);
+  }
+}
+
+// 初始化表單
+function initializeSheets() {
+  try {
+    const spreadsheet = getCurrentSpreadsheet();
+    
+    let orderSheet = spreadsheet.getSheetByName(SHEET_NAME);
+    if (!orderSheet) {
+      orderSheet = initializeOrderSheet(spreadsheet);
+    }
+    
+    let menuSheet = spreadsheet.getSheetByName('菜單');
+    if (!menuSheet) {
+      menuSheet = spreadsheet.insertSheet('菜單');
+      const menuHeaders = ['名稱', '價格', '圖標', '狀態', '圖片'];
+      menuSheet.getRange(1, 1, 1, menuHeaders.length).setValues([menuHeaders]);
+      menuSheet.getRange(1, 1, 1, menuHeaders.length).setFontWeight('bold');
+      
+      // 設置欄位寬度
+      menuSheet.setColumnWidth(1, 120); // 名稱
+      menuSheet.setColumnWidth(2, 80);  // 價格
+      menuSheet.setColumnWidth(3, 80);  // 圖標
+      menuSheet.setColumnWidth(4, 100); // 狀態
+      menuSheet.setColumnWidth(5, 200); // 圖片
+      
+      const defaultMenu = getDefaultMenu();
+      defaultMenu.forEach(item => {
+        menuSheet.appendRow([item.name, item.price, item.icon, item.status, item.image || '']);
+      });
+      
+      console.log('菜單表單初始化完成');
+    }
+    
+    console.log('所有表單初始化完成');
+    return '初始化成功！';
+    
+  } catch (error) {
+    console.error('初始化表單錯誤:', error);
+    return '初始化失敗: ' + error.message;
+  }
+}
+
+// 測試函數
+function testCreateOrder() {
+  const testOrderData = {
+    customerName: '測試顧客',
+    customerPhone: '0936220535',
+    items: [
+      { name: '滷肉飯', price: 35, quantity: 2 },
+      { name: '珍珠奶茶', price: 45, quantity: 1 }
+    ],
+    pickupTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    deliveryAddress: '測試地址',
+    notes: '測試備註'
+  };
+  
+  const result = createOrder(testOrderData, 'test_token');
+  console.log('測試訂單創建結果:', result);
+  return result;
+}
+
+function testGetOrders() {
+  // 測試搜尋 0936220535
+  const params1 = {
+    customerName: '測試顧客',
+    customerPhone: '0936220535',
+    startDate: '2024-01-01',
+    endDate: '2024-12-31'
+  };
+  
+  // 測試搜尋 936220535
+  const params2 = {
+    customerName: '測試顧客',
+    customerPhone: '936220535',
+    startDate: '2024-01-01',
+    endDate: '2024-12-31'
+  };
+  
+  const result1 = getOrders(params1);
+  const result2 = getOrders(params2);
+  
+  console.log('搜尋 0936220535 結果:', result1);
+  console.log('搜尋 936220535 結果:', result2);
+  
+  return {
+    searchWithZero: result1,
+    searchWithoutZero: result2
+  };
+}
+
+// 清除所有測試資料
+function clearTestData() {
+  try {
+    const spreadsheet = getCurrentSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(SHEET_NAME);
+    
+    if (sheet && sheet.getLastRow() > 1) {
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+      console.log('測試資料已清除');
+    }
+    
+    return '測試資料清除完成';
+  } catch (error) {
+    console.error('清除資料錯誤:', error);
+    return '清除失敗: ' + error.message;
+  }
+}

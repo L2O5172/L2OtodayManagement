@@ -1,27 +1,39 @@
 
-export interface MenuItem {
-  name: string;
-  price: number;
-  icon: string;
-}
-
-export interface OrderItem extends MenuItem {
-  quantity: number;
-}
-
 export type OrderStatus = 'pending' | 'confirmed' | 'preparing' | 'ready' | 'completed' | 'cancelled';
 
 export interface Order {
   orderId: string;
   customerName: string;
   customerPhone: string;
-  items: OrderItem[];
+  items: string;
   totalAmount: number;
-  status: OrderStatus;
   pickupTime: string;
   deliveryAddress: string;
   notes: string;
+  status: OrderStatus;
   createdAt: string;
-  confirmedAt: string | null;
-  adminNotes?: string;
+  adminNotes: string;
+  updatedAt: string;
+}
+
+export interface MenuItem {
+  name: string;
+  price: number;
+  icon: string;
+  status: string;
+  image: string;
+}
+
+export type NotificationType = 'success' | 'error' | 'warning' | 'info';
+
+export interface NotificationState {
+  message: string;
+  type: NotificationType;
+  visible: boolean;
+}
+
+export interface ApiResponse<T> {
+  success: boolean;
+  data: T;
+  message: string;
 }

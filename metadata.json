@@ -1,5 +1,5 @@
 {
-  "name": "Taiwanese Snack Shop Management System",
-  "description": "An order and sales management system for a Taiwanese snack shop, featuring real-time order tracking, status updates, and comprehensive sales analytics dashboards.",
+  "name": "Taiwanese Snack Shop - Order ManagementGOOD",
+  "description": "A web application for managing orders for a Taiwanese snack shop. It allows viewing, filtering, and updating order statuses, as well as viewing sales statistics. The backend is powered by Google Apps Script.",
   "requestFramePermissions": []
 }
