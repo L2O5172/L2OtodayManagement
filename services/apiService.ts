@@ -90,27 +90,55 @@ export const apiService = {
         }
     },
 
-    // NOTE: The provided backend script does not have endpoints for confirming or updating orders.
-    // These functions will remain mocked on the frontend for now.
-    confirmOrder: async (orderId: string, adminNotes: string): Promise<{ success: true, message: string }> => {
+    confirmOrder: async (orderId: string, adminNotes: string): Promise<{ success: boolean; message: string }> => {
         try {
-            await new Promise(resolve => setTimeout(resolve, 500));
-            console.log(`(Mocked) Order ${orderId} confirmed with notes: ${adminNotes}`);
-            return { success: true, message: '訂單確認成功' };
+            const response = await fetch(SCRIPT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({
+                    action: 'confirmOrder',
+                    orderId,
+                    adminNotes,
+                }),
+            });
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`網路回應錯誤: ${response.status} ${errorText}`);
+            }
+            const result = await response.json();
+            if (!result.success) {
+                throw new Error(result.message || '後端確認訂單失敗');
+            }
+            return { success: true, message: result.message || '訂單確認成功' };
         } catch (error) {
             console.error('確認訂單 API 失敗:', error);
-            throw error;
+            throw error; // Rethrow to be caught by the component
         }
     },
 
-    updateOrderStatus: async (orderId: string, status: OrderStatus): Promise<{ success: true, message: string }> => {
+    updateOrderStatus: async (orderId: string, status: OrderStatus): Promise<{ success: boolean; message: string }> => {
         try {
-            await new Promise(resolve => setTimeout(resolve, 500));
-            console.log(`(Mocked) Order ${orderId} status updated to: ${status}`);
-            return { success: true, message: '狀態更新成功' };
+            const response = await fetch(SCRIPT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({
+                    action: 'updateOrderStatus',
+                    orderId,
+                    status,
+                }),
+            });
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`網路回應錯誤: ${response.status} ${errorText}`);
+            }
+            const result = await response.json();
+            if (!result.success) {
+                throw new Error(result.message || '後端更新狀態失敗');
+            }
+            return { success: true, message: result.message ||'狀態更新成功' };
         } catch (error) {
             console.error('更新狀態 API 失敗:', error);
-            throw error;
+            throw error; // Rethrow to be caught by the component
         }
     }
 };
